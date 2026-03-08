@@ -1,7 +1,7 @@
 version: '3.3'
 services:
   abs-autoconverter:
-    image: cutzenfriend/abs-autoconverter:latest
+    image: ghcr.io/jamztheman/docker-absautoconverter:latest
     container_name: abs-autoconverter
     restart: unless-stopped
     environment:
@@ -9,6 +9,8 @@ services:
       DOMAIN: "https://abs.example.com" #Please edit - mandatory
       LIBRARY_ID: "lib1-id,lib2-id" #Please edit - mandatory, comma-separated for multiple libraries
       MAX_PARALLEL_CONVERSIONS: 3 #Keep CPU power in mind. Too many conversion in parallel decrease performance on your host!
-      #CRON_SETTING: #optional - default is: (20 * * * * ) - every hour at minute 20
+      CRON_SETTING: "*/15 * * * *" #optional - default is: (20 * * * * ) - every hour at minute 20
       BITRATE: "128k" #optional - default is 128k, set to "source" to match each item's original bitrate
+      #RUN_ON_STARTUP: "true" #optional - default is true, set to "false" to skip the initial check on startup
+      #MAX_RETRIES: 3 #optional - default is 3, max conversion retry attempts per item before giving up
       TOKEN: "YOUR AUDIOBOOKSHELF API TOKEN" #Please edit - mandatory
