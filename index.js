@@ -67,7 +67,19 @@ if (process.env.BITRATE) {
   log('BITRATE set to default 128k');
 }
 
+var MAX_RETRIES;
+if (process.env.MAX_RETRIES) {
+  MAX_RETRIES = parseInt(process.env.MAX_RETRIES);
+  log('MAX_RETRIES is set to: ' + MAX_RETRIES);
+} else {
+  MAX_RETRIES = 3;
+  log('MAX_RETRIES set to default 3');
+}
+
 const headers = { Authorization: 'Bearer ' + TOKEN };
+
+// Track failed conversion attempts per item: itemId -> { title, count }
+const failedItems = new Map();
 
 function collectItems(obj, results = []) {
   if (Array.isArray(obj)) {
@@ -103,6 +115,20 @@ async function getActiveConversions() {
       t.action && t.action.includes('encode-m4b') && !t.isFinished && !t.isFailed
     );
     const activeItemIds = new Set(active.map(t => t.data?.libraryItemId).filter(Boolean));
+
+    // Track newly failed tasks
+    const failed = tasks.filter(t =>
+      t.action && t.action.includes('encode-m4b') && t.isFailed
+    );
+    for (const task of failed) {
+      const itemId = task.data?.libraryItemId;
+      if (itemId) {
+        if (!failedItems.has(itemId)) {
+          failedItems.set(itemId, { title: task.title || itemId, count: 1 });
+        }
+      }
+    }
+
     return { count: active.length, activeItemIds };
   } catch (error) {
     log('Warning: failed to fetch tasks, falling back to full slot count: ' + error.message);
@@ -125,11 +151,12 @@ async function start() {
   }
 
   let totalStarted = 0;
+  const startedThisCycle = new Set();
 
   for (const libraryId of LIBRARY_IDS) {
     if (slotsAvailable <= 0) break;
 
-    const url = `${DOMAIN}/api/libraries/${libraryId}/items?limit=${slotsAvailable}&page=0&filter=tracks.bXVsdGk%3D`;
+    const url = `${DOMAIN}/api/libraries/${libraryId}/items?limit=${slotsAvailable + activeItemIds.size + startedThisCycle.size}&page=0&filter=tracks.bXVsdGk%3D`;
 
     let response;
     try {
@@ -155,6 +182,17 @@ async function start() {
         continue;
       }
 
+      if (startedThisCycle.has(item.id)) {
+        log('Skipping (already started this cycle): ' + item.title);
+        continue;
+      }
+
+      const failRecord = failedItems.get(item.id);
+      if (failRecord && failRecord.count >= MAX_RETRIES) {
+        log(`Skipping (failed ${failRecord.count}/${MAX_RETRIES} times, max retries reached): ${item.title}`);
+        continue;
+      }
+
       let bitrate = BITRATE;
       if (BITRATE === 'source') {
         const sourceBitrate = await getSourceBitrate(item.id);
@@ -170,16 +208,33 @@ async function start() {
       log('Starting conversion: ' + item.title);
       try {
         await axios.post(`${DOMAIN}/api/tools/item/${item.id}/encode-m4b?token=${TOKEN}&bitrate=${bitrate}`);
+        startedThisCycle.add(item.id);
+        slotsAvailable--;
+        totalStarted++;
       } catch (error) {
-        log('Error starting conversion for ' + item.title + ': ' + error.message);
+        const existing = failedItems.get(item.id);
+        const count = existing ? existing.count + 1 : 1;
+        failedItems.set(item.id, { title: item.title, count });
+        log(`Error starting conversion for ${item.title} (failure ${count}/${MAX_RETRIES}): ${error.message}`);
       }
-
-      slotsAvailable--;
-      totalStarted++;
     }
   }
 
   log(`Conversion cycle complete: ${totalStarted} conversion(s) started`);
+}
+
+// Run immediately on startup unless explicitly disabled
+var RUN_ON_STARTUP = true;
+if (process.env.RUN_ON_STARTUP !== undefined && process.env.RUN_ON_STARTUP.toLowerCase() === 'false') {
+  RUN_ON_STARTUP = false;
+  log('RUN_ON_STARTUP is disabled, waiting for first cron trigger');
+}
+
+if (RUN_ON_STARTUP) {
+  log('Running initial check on startup...');
+  start().catch(error => {
+    log('Unhandled error in start(): ' + error.message);
+  });
 }
 
 // CRON START
