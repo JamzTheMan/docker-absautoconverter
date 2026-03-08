@@ -25,10 +25,11 @@ https://hub.docker.com/r/cutzenfriend/abs-autoconverter
 ## How it works
 
 1. Check for active `.m4b` conversion tasks on the server and calculate available slots (`MAX_PARALLEL_CONVERSIONS` minus active conversions)
-2. For each configured library (supports multiple, comma-separated), fetch multi-file audiobooks via the Audiobookshelf API
-3. Start `.m4b` conversions for available slots — libraries are processed sequentially and share the slot pool
-4. Encoding uses the configured `BITRATE`, or when set to `"source"`, matches each item's original audio bitrate
-5. Repeat on a cron schedule (default: every hour at minute 20)
+2. For each configured library (supports multiple, comma-separated), fetch all audiobooks via the Audiobookshelf API
+3. Skip any book that is already a single `.m4b` file — all other formats (single MP3, multi-file MP3s, etc.) are queued for conversion
+4. Start `.m4b` conversions for available slots — libraries are processed sequentially and share the slot pool
+5. Encoding uses the configured `BITRATE`, or when set to `"source"`, matches each item's original audio bitrate
+6. Repeat on a cron schedule (default: every hour at minute 20)
 
 ## Getting Started
 

@@ -86,11 +86,46 @@ function collectItems(obj, results = []) {
     obj.forEach(item => collectItems(item, results));
   } else if (obj && typeof obj === 'object') {
     if (obj.id && obj.media?.metadata?.title) {
-      results.push({ id: obj.id, title: obj.media.metadata.title });
+      results.push({
+        id: obj.id,
+        title: obj.media.metadata.title,
+        audioFiles: obj.media?.audioFiles || [],
+        numTracks: obj.media?.numTracks ?? obj.media?.audioFiles?.length ?? null,
+      });
     }
     Object.values(obj).forEach(value => collectItems(value, results));
   }
   return results;
+}
+
+function isAlreadyM4b(item) {
+  // If we have audioFiles info from the API, check if it's a single m4b already
+  if (item.audioFiles && item.audioFiles.length === 1) {
+    const ext = (item.audioFiles[0].metadata?.ext || '').toLowerCase();
+    if (ext === '.m4b') return true;
+  }
+  return false;
+}
+
+async function checkItemNeedsConversion(item) {
+  // If we already have audioFiles data, use it directly
+  if (item.audioFiles && item.audioFiles.length > 0) {
+    return !isAlreadyM4b(item);
+  }
+  // Otherwise, fetch expanded item details to check
+  try {
+    const response = await axios.get(`${DOMAIN}/api/items/${item.id}?expanded=1`, { headers });
+    const audioFiles = response.data?.media?.audioFiles || [];
+    if (audioFiles.length === 0) return false;
+    if (audioFiles.length === 1) {
+      const ext = (audioFiles[0].metadata?.ext || '').toLowerCase();
+      if (ext === '.m4b') return false;
+    }
+    return true;
+  } catch (error) {
+    log('Warning: failed to check item details for ' + item.title + ': ' + error.message);
+    return false;
+  }
 }
 
 async function getSourceBitrate(itemId) {
@@ -156,7 +191,7 @@ async function start() {
   for (const libraryId of LIBRARY_IDS) {
     if (slotsAvailable <= 0) break;
 
-    const url = `${DOMAIN}/api/libraries/${libraryId}/items?limit=${slotsAvailable + activeItemIds.size + startedThisCycle.size}&page=0&filter=tracks.bXVsdGk%3D`;
+    const url = `${DOMAIN}/api/libraries/${libraryId}/items?limit=0&page=0`;
 
     let response;
     try {
@@ -168,11 +203,11 @@ async function start() {
 
     const items = collectItems(response.data);
     if (items.length === 0) {
-      log('No multi-file audiobooks found in library ' + libraryId);
+      log('No audiobooks found in library ' + libraryId);
       continue;
     }
 
-    log('Found ' + items.length + ' multi-file audiobook(s) in library ' + libraryId);
+    log('Found ' + items.length + ' audiobook(s) in library ' + libraryId);
 
     for (const item of items) {
       if (slotsAvailable <= 0) break;
@@ -190,6 +225,12 @@ async function start() {
       const failRecord = failedItems.get(item.id);
       if (failRecord && failRecord.count >= MAX_RETRIES) {
         log(`Skipping (failed ${failRecord.count}/${MAX_RETRIES} times, max retries reached): ${item.title}`);
+        continue;
+      }
+
+      // Check if item is already a single M4B (no conversion needed)
+      const needsConversion = await checkItemNeedsConversion(item);
+      if (!needsConversion) {
         continue;
       }
 
